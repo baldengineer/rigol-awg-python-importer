@@ -112,3 +112,7 @@ def idn(resource: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> str:
     """Connect to *resource* and return its IEEE-488.2 identity response."""
     with VisaConnection(resource, timeout_ms) as connection:
         return connection.query("*IDN?")
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

@@ -10,3 +10,7 @@ def test_packaged_specs_keep_channel_memory_depths_separate() -> None:
     assert specs.channel(1).vertical_resolution_bits == 14
     assert specs.channel(2).sampling_rate_msps == 100.0
     assert specs.nonvolatile_waveform_count == 10
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

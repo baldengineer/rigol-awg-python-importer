@@ -280,6 +280,7 @@ def upload_waveform(
     low = "VOLT:LOW" if channel == 1 else "VOLT:LOW:CH2"
     select = "FUNC:USER" if channel == 1 else "FUNC:USER:CH2"
     function_query = "FUNC?" if channel == 1 else "FUNC:CH2?"
+    user_wave_query = "FUNC:USER?" if channel == 1 else "FUNC:USER:CH2?"
     function = "FUNC" if channel == 1 else "FUNC:CH2"
     user_name = None if user_slot is None else _user_wave_name(user_slot)
     low_voltage = offset_voltage - amplitude_vpp / 2.0
@@ -339,6 +340,12 @@ def upload_waveform(
                 f"selecting {selected_name} on channel {channel}",
             )
             selected_function = connection.query(function_query)
+            selected_user_waveform = connection.query(user_wave_query).strip().strip('"')
+            if selected_user_waveform.upper() != selected_name.upper():
+                raise RuntimeError(
+                    f"Channel {channel} selected {selected_user_waveform}; "
+                    f"expected {selected_name}"
+                )
             _write_and_check(
                 connection,
                 f"{output} {'ON' if enable_output else 'OFF'}",
@@ -359,6 +366,7 @@ def upload_waveform(
                 "user_memory": user_name or "",
                 "channel": str(channel),
                 "function": selected_function,
+                "selected_user_waveform": selected_user_waveform,
                 "output": output_state,
                 "error": status,
             }
@@ -479,3 +487,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

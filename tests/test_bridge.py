@@ -29,6 +29,7 @@ def test_bridge_returns_json_safe_result(monkeypatch) -> None:
             "user_memory": "",
             "channel": "1",
             "function": "CH1:ARB",
+            "selected_user_waveform": "VOLATILE",
             "output": "OFF",
             "error": '+0,"No Error"',
         }
@@ -50,6 +51,7 @@ def test_bridge_returns_json_safe_result(monkeypatch) -> None:
         "points": 4,
         "instrument_reported_points": 4096,
         "channel": 1,
+        "selected_user_waveform": "VOLATILE",
         "output_enabled": False,
         "persistent_memory": None,
     }
@@ -88,3 +90,7 @@ def test_bridge_rejects_unknown_option() -> None:
         assert "unknown option" in str(exc)
     else:
         raise AssertionError("unknown option was accepted")
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

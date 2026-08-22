@@ -130,3 +130,7 @@ def load_specs(path: str | Path | Any = SPECS_FILE) -> AwgSpecs:
         nonvolatile_storage_scope=scope,
         channels=tuple(channels),
     )
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

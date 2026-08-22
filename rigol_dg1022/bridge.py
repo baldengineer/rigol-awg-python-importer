@@ -195,6 +195,11 @@ def send_waveform(request: dict[str, Any]) -> dict[str, Any]:
         "points": waveform.sample_count,
         "instrument_reported_points": int(result["reported_points"]),
         "channel": adapter_options.channel,
+        "selected_user_waveform": result["selected_user_waveform"],
         "output_enabled": output_enabled,
         "persistent_memory": persistent_memory,
     }
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

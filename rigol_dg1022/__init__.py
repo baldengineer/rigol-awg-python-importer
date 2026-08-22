@@ -11,3 +11,7 @@ __all__ = [
     "list_resources",
     "load_specs",
 ]
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

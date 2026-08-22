@@ -60,3 +60,7 @@ def test_idn_configures_and_queries_visa(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_invalid_timeout_is_rejected() -> None:
     with pytest.raises(ValueError, match="positive integer"):
         visa.VisaConnection("USB0::TEST::INSTR", 0)
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis

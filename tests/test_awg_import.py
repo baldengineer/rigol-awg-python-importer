@@ -26,6 +26,8 @@ class FakeConnection:
             return "RIGOL TECHNOLOGIES,DG1022,SN123,01.01"
         if command == "FUNC:CH2?":
             return "CH2:ARB"
+        if command == "FUNC:USER:CH2?":
+            return "C"
         if command == "OUTP:CH2?":
             return "OFF"
         if command == "DATA:ATTR:POINTS? C":
@@ -77,4 +79,10 @@ def test_upload_uses_documented_ch2_commands(monkeypatch) -> None:
     assert "FUNC:USER:CH2 C" in writes
     assert "OUTP:CH2 OFF" in writes
     assert writes[-1] == "SYST:LOC"
+    assert "FUNC:USER:CH2?" in FakeConnection.instances[0].queries
+    assert result["selected_user_waveform"] == "C"
     assert result["user_memory"] == "C"
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 James Lewis
