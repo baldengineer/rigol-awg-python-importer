@@ -48,6 +48,37 @@ through `J`). The channel-specific `FREQ`, `VOLT`, `FUNC`, and `OUTP` command
 forms are used for CH1 and CH2 respectively. Keep `--enable-output` off while
 validating a first hardware upload.
 
+## ArbDraw bridge
+
+Install this adapter into the ArbDraw virtual environment in editable mode:
+
+```powershell
+& "C:\Users\balde\Dropbox\Projects\Test Tool Projects\ArbDraw\.venv\Scripts\python.exe" -m pip install -e "."
+```
+
+From the ArbDraw project directory, start its bridge with this adapter endpoint:
+
+```powershell
+& .\.venv\Scripts\python.exe -m python_bridge --serve-app . `
+    --port 8876 `
+    --waveform-handler rigol_dg1022.bridge:send_waveform
+```
+
+If a vendor VISA implementation is unavailable, use the installed PyVISA-py
+backend explicitly:
+
+```powershell
+& .\.venv\Scripts\python.exe -m python_bridge --serve-app . `
+    --port 8876 `
+    --visa-library @py `
+    --waveform-handler rigol_dg1022.bridge:send_waveform
+```
+
+The adapter receives ArbDraw's in-memory version 1 document through
+`POST /api/v1/waveforms/send`, validates the selected channel and options, and
+returns a JSON-safe result. DG1022 waveform transfers require a USBTMC VISA
+resource; output remains off unless ArbDraw explicitly requests it.
+
 ## Hardware specifications
 
 Channel-aware specifications are stored in
@@ -62,9 +93,7 @@ channel-specific hardware limits.
 
 - Product Page: [Rigol DG1000](https://www.rigolna.com/products/waveform-generators/dg1000/)
 
-## Scope of this first step
+## Scope
 
-This commit establishes resource discovery, connection setup, SCPI write/query
-handling, timeout management, and identity verification. ArbDraw waveform encoding
-and DG1022-specific arbitrary-waveform commands will build on this transport after
-the connected unit's identity and firmware behavior are confirmed.
+This project provides resource discovery, SCPI communication, channel-aware
+specifications, ArbDraw bridge integration, and DG1022 arbitrary-waveform upload.

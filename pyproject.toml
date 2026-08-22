@@ -9,13 +9,13 @@ description = "ArbDraw adapter foundation for the Rigol DG1022 function generato
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
-dependencies = ["PyVISA>=1.13"]
+dependencies = ["PyVISA>=1.13", "PyVISA-py>=0.8"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
 
 [tool.setuptools]
-py-modules = []
+py-modules = ["awg_import"]
 
 [tool.setuptools.packages.find]
 include = ["rigol_dg1022*"]
