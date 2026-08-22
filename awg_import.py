@@ -363,8 +363,20 @@ def upload_waveform(
                 "error": status,
             }
         finally:
-            if not completed or not enable_output:
-                connection.write(f"{output} OFF")
+            try:
+                if not completed or not enable_output:
+                    connection.write(f"{output} OFF")
+                    time.sleep(SCPI_SETTLE_SECONDS)
+            finally:
+                # DG1000 documents SYSTem:LOCal as the command that returns
+                # control to the front panel after remote operation.
+                try:
+                    connection.write("SYST:LOC")
+                    time.sleep(SCPI_SETTLE_SECONDS)
+                except RuntimeError:
+                    # Do not mask the original upload error if the session is
+                    # already unusable during cleanup.
+                    pass
 
 
 def parse_args() -> argparse.Namespace:

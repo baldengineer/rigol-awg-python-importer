@@ -76,4 +76,5 @@ def test_upload_uses_documented_ch2_commands(monkeypatch) -> None:
     assert "DATA:COPY C,VOLATILE" in writes
     assert "FUNC:USER:CH2 C" in writes
     assert "OUTP:CH2 OFF" in writes
+    assert writes[-1] == "SYST:LOC"
     assert result["user_memory"] == "C"
