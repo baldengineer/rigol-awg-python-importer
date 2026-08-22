@@ -36,6 +36,10 @@ from programming-manual limits and unresolved questions.
 - Verify selection with `FUNC:USER?` for CH1 or `FUNC:USER:CH2?` for CH2.
 - Use channel-specific forms for frequency, voltage, and output commands:
   `FREQ`/`FREQ:CH2`, `VOLT:*`/`VOLT:*:CH2`, and `OUTP`/`OUTP:CH2`.
+- The adapter rejects CH2 arbitrary-waveform operations by default because
+  this legacy firmware has not been shown to load arbitrary data into CH2.
+  Use the explicit `--allow-channel-2` CLI switch, or the bridge option
+  `allow_channel_2: true`, only for experimental testing.
 
 ## Channel limits
 
@@ -79,10 +83,12 @@ Important DG1022 firmware quirks:
   numbered `STATE1` through `STATE10` locations in the manual are separate
   instrument-state memories and must not be confused with DATA waveform
   memories.
-- `DATA:COPY <destination arb name>,VOLATILE` copies the current volatile
-  waveform into nonvolatile storage. Enforce the manual’s name rule for new
-  names: 1-12 characters, first character A-Z or a-z, remaining characters
-  A-Z/a-z, 0-9, or `_`, with no spaces.
+- `DATA:COPY <destination arb name>` copies the current volatile waveform into
+  nonvolatile storage. Although the manual documents an optional `,VOLATILE`
+  source argument, this DG1022 firmware rejects that form with
+  `-118,"Invalid parameter"`; omit the optional argument. Enforce the manual’s
+  name rule for new names: 1-12 characters, first character A-Z or a-z,
+  remaining characters A-Z/a-z, 0-9, or `_`, with no spaces.
 - `DATA:RENAME <old name>,<new name>` renames a nonvolatile waveform. The
   validate the new name with the same creation rule. Existing legacy names
   such as `000` may still be accepted as the old reference so they can be

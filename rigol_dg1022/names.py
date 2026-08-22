@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 
 _WAVEFORM_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,11}$")
@@ -32,6 +33,17 @@ def validate_waveform_reference(name: str, field: str = "waveform name") -> str:
             "or underscores"
         )
     return name
+
+
+def default_waveform_name(filename: str | Path) -> str:
+    """Derive a valid persistent name from a waveform file stem."""
+    stem = Path(filename).stem or "Waveform"
+    normalized = "".join(character if re.fullmatch(r"[A-Za-z0-9_]", character) else "_" for character in stem)
+    if not normalized:
+        normalized = "Waveform"
+    if not normalized[0].isalpha():
+        normalized = f"A_{normalized}"
+    return validate_waveform_name(normalized[:12], "derived waveform name")
 
 
 # SPDX-License-Identifier: MIT

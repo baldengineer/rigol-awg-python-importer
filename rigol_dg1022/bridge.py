@@ -59,6 +59,7 @@ class AdapterOptions:
     frequency_hz: float | None = None
     amplitude_vpp: float | None = None
     offset_voltage: float | None = None
+    allow_channel_2: bool = False
 
     @classmethod
     def from_mapping(cls, values: dict[str, Any]) -> "AdapterOptions":
@@ -71,6 +72,7 @@ class AdapterOptions:
             "frequency_hz",
             "amplitude_vpp",
             "offset_voltage",
+            "allow_channel_2",
         }
         unknown = sorted(set(values) - allowed)
         if unknown:
@@ -83,6 +85,9 @@ class AdapterOptions:
         enable_output = values.get("enable_output", False)
         if not isinstance(persist, bool) or not isinstance(enable_output, bool):
             raise ValueError("options.persist and options.enable_output must be boolean")
+        allow_channel_2 = values.get("allow_channel_2", False)
+        if not isinstance(allow_channel_2, bool):
+            raise ValueError("options.allow_channel_2 must be boolean")
 
         user_slot = values.get("user_slot")
         if user_slot is not None and (
@@ -109,6 +114,7 @@ class AdapterOptions:
             frequency_hz=optional_number("frequency_hz", positive=True),
             amplitude_vpp=optional_number("amplitude_vpp", positive=True),
             offset_voltage=optional_number("offset_voltage"),
+            allow_channel_2=allow_channel_2,
         )
 
 
@@ -179,6 +185,7 @@ def send_waveform(request: dict[str, Any]) -> dict[str, Any]:
             offset_voltage,
             frequency_hz,
             config,
+            allow_channel_2=adapter_options.allow_channel_2,
         )
 
     output_enabled = result["output"].upper() in {"ON", "1"}

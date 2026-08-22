@@ -48,6 +48,30 @@ through `J`). The channel-specific `FREQ`, `VOLT`, `FUNC`, and `OUTP` command
 forms are used for CH1 and CH2 respectively. Keep `--enable-output` off while
 validating a first hardware upload.
 
+Persistent uploads can use an explicit manual-compliant name, or derive one
+from the input filename stem:
+
+```powershell
+python .\awg_import.py --persist --name MyWave_1 .\examples\hello_world_56700.csv
+python .\awg_import.py --persist .\examples\hello_world_56700.csv
+```
+
+Derived names are limited to 12 characters, replace invalid characters with
+underscores, and are adjusted to begin with a letter. If the persistent name
+already exists, the import stops before sending waveform data. Use
+`--overwrite` to replace it.
+
+Add `--debug` to print every SCPI command and query response to stderr when
+diagnosing an instrument communication sequence:
+
+```powershell
+python .\awg_import.py --debug --channel 2 .\examples\hello_world_56700.csv
+```
+
+CH2 arbitrary-waveform operation is disabled by default because the legacy
+DG1022 firmware has not been shown to load arbitrary data into CH2. Explicitly
+opt in for experimental hardware testing with `--allow-channel-2`.
+
 Query the names of user-defined waveforms in the DG1022's nonvolatile data
 memory with:
 

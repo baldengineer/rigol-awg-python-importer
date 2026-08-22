@@ -23,13 +23,34 @@ from pathlib import Path
 from typing import Any
 
 from rigol_dg1022.visa import DEFAULT_TIMEOUT_MS, VisaConnection, idn, list_resources
-from rigol_dg1022.names import validate_waveform_name
+from rigol_dg1022.names import default_waveform_name, validate_waveform_name
 from rigol_dg1022.specs import load_specs
 
 
 DEFAULTS_FILE = "defaults.toml"
 SCPI_SETTLE_SECONDS = 2.0
 DATA_DAC_SETTLE_SECONDS = 2.0
+
+
+class _DebugConnection:
+    """Trace SCPI traffic while preserving the VISA connection interface."""
+
+    def __init__(self, connection: VisaConnection, enabled: bool) -> None:
+        self._connection = connection
+        self._enabled = enabled
+
+    def write(self, command: str) -> None:
+        if self._enabled:
+            print(f"SCPI >> {command}", file=sys.stderr, flush=True)
+        self._connection.write(command)
+
+    def query(self, command: str) -> str:
+        if self._enabled:
+            print(f"SCPI >> {command}", file=sys.stderr, flush=True)
+        response = self._connection.query(command)
+        if self._enabled:
+            print(f"SCPI << {response}", file=sys.stderr, flush=True)
+        return response
 
 
 @dataclass(frozen=True)
@@ -220,9 +241,17 @@ def make_ieee_block(payload: bytes) -> bytes:
     return b"#" + str(len(length)).encode("ascii") + length + payload
 
 
-def set_output_state(resource: str, timeout_ms: int, channel: int, enabled: bool) -> None:
+def set_output_state(
+    resource: str,
+    timeout_ms: int,
+    channel: int,
+    enabled: bool,
+    *,
+    debug: bool = False,
+) -> None:
     output_command = "OUTP" if channel == 1 else "OUTP:CH2"
-    with VisaConnection(resource, timeout_ms) as connection:
+    with VisaConnection(resource, timeout_ms) as raw_connection:
+        connection = _DebugConnection(raw_connection, debug)
         connection.write(f"{output_command} {'ON' if enabled else 'OFF'}")
 
 
@@ -254,6 +283,52 @@ def _user_wave_name(user_slot: int) -> str:
     return validate_waveform_name(chr(ord("A") + user_slot), "persistent waveform name")
 
 
+def _parse_catalog_names(response: str) -> tuple[str, ...]:
+    normalized = response.strip()
+    if normalized.endswith(","):
+        normalized = normalized[:-1].rstrip()
+    if normalized == '""':
+        return ()
+    try:
+        rows = list(csv.reader([normalized], skipinitialspace=True, strict=True))
+    except csv.Error as exc:
+        raise RuntimeError(f"Could not parse nonvolatile waveform catalog: {response!r}") from exc
+    if len(rows) != 1 or any(not name for name in rows[0]):
+        raise RuntimeError(f"Could not parse nonvolatile waveform catalog: {response!r}")
+    return tuple(name.strip() for name in rows[0])
+
+
+def _nonvolatile_names(connection: VisaConnection) -> tuple[int, tuple[str, ...]]:
+    free_slots_response = connection.query("DATA:NVOL:FREE?").strip()
+    try:
+        free_slots = int(free_slots_response)
+    except ValueError as exc:
+        raise RuntimeError(f"Unparseable nonvolatile free-slot response: {free_slots_response}") from exc
+    if not 0 <= free_slots <= 10:
+        raise RuntimeError(f"Invalid nonvolatile free-slot response: {free_slots_response}")
+    if free_slots == 10:
+        return free_slots, ()
+    return free_slots, _parse_catalog_names(connection.query("DATA:NVOL:CAT?"))
+
+
+def _check_persistent_name(
+    connection: VisaConnection,
+    name: str,
+    overwrite: bool,
+) -> bool:
+    free_slots, names = _nonvolatile_names(connection)
+    existing = {candidate.upper() for candidate in names}
+    if name.upper() in existing:
+        if not overwrite:
+            raise RuntimeError(
+                f"Persistent waveform {name!r} already exists; use --overwrite to replace it"
+            )
+        return True
+    if free_slots == 0:
+        raise RuntimeError("No free nonvolatile waveform memories are available")
+    return False
+
+
 def upload_waveform(
     resource: str,
     timeout_ms: int,
@@ -265,8 +340,18 @@ def upload_waveform(
     offset_voltage: float,
     frequency_hz: float,
     config: Config,
+    *,
+    persistent_name: str | None = None,
+    overwrite: bool = False,
+    debug: bool = False,
+    allow_channel_2: bool = False,
 ) -> dict[str, str]:
     """Upload one ASCII DAC waveform and configure either DG1000 channel."""
+    if channel == 2 and not allow_channel_2:
+        raise ValueError(
+            "Channel 2 arbitrary-waveform operation is disabled by default; "
+            "use --allow-channel-2 to override"
+        )
     specs = load_specs()
     channel_specs = specs.channel(channel)
     if waveform.sample_count > channel_specs.arb_memory_depth_points:
@@ -283,16 +368,31 @@ def upload_waveform(
     function_query = "FUNC?" if channel == 1 else "FUNC:CH2?"
     user_wave_query = "FUNC:USER?" if channel == 1 else "FUNC:USER:CH2?"
     function = "FUNC" if channel == 1 else "FUNC:CH2"
-    user_name = None if user_slot is None else _user_wave_name(user_slot)
+    if user_slot is not None and persistent_name is not None:
+        raise ValueError("user_slot and persistent_name cannot both be provided")
+    user_name = (
+        None
+        if user_slot is None and persistent_name is None
+        else _user_wave_name(user_slot) if user_slot is not None
+        else validate_waveform_name(persistent_name or "", "persistent waveform name")
+    )
+    if overwrite and user_name is None:
+        raise ValueError("overwrite requires a persistent waveform name")
     low_voltage = offset_voltage - amplitude_vpp / 2.0
     high_voltage = offset_voltage + amplitude_vpp / 2.0
     completed = False
 
-    with VisaConnection(resource, timeout_ms) as connection:
+    with VisaConnection(resource, timeout_ms) as raw_connection:
+        connection = _DebugConnection(raw_connection, debug)
         identity = connection.query("*IDN?")
         if config.expected_identity_prefix and not identity.startswith(config.expected_identity_prefix):
             raise RuntimeError(f"Unexpected instrument identity: {identity}")
         try:
+            existing_name = (
+                _check_persistent_name(connection, user_name, overwrite)
+                if user_name is not None
+                else False
+            )
             _write_and_check(connection, f"{output} OFF", f"disabling channel {channel}")
             _write_and_check(
                 connection,
@@ -326,9 +426,15 @@ def upload_waveform(
                 settle_seconds=DATA_DAC_SETTLE_SECONDS,
             )
             if user_name is not None:
+                if existing_name:
+                    _write_and_check(
+                        connection,
+                        f"DATA:DEL {user_name}",
+                        f"deleting existing waveform {user_name}",
+                    )
                 _write_and_check(
                 connection,
-                f"DATA:COPY {user_name},VOLATILE",
+                f"DATA:COPY {user_name}",
                 f"storing waveform as {user_name}",
                     settle_seconds=2.0,
                 )
@@ -407,8 +513,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resource", default=defaults["usb_resource"], help="VISA resource")
     parser.add_argument("--visa-timeout-ms", type=int, default=defaults["timeout_ms"], help="VISA timeout in milliseconds")
     parser.add_argument("--persist", action=argparse.BooleanOptionalAction, default=defaults["persist"], help="copy waveform into persistent memory")
+    parser.add_argument("--name", dest="waveform_name", help="persistent waveform name (1-12 characters; requires --persist)")
+    parser.add_argument("--overwrite", action="store_true", help="replace an existing persistent waveform with the same name")
+    parser.add_argument("--debug", action="store_true", help="print SCPI commands and query responses to stderr")
     parser.add_argument("--user-slot", type=int, choices=range(10), metavar="0..9", help="persistent DG1000 memory slot (0=A through 9=J)")
-    parser.add_argument("--channel", type=int, choices=(1, 2), default=defaults["channel"], help="AWG output channel")
+    parser.add_argument("--channel", type=int, choices=(1, 2), default=defaults["channel"], help="AWG output channel (CH2 requires --allow-channel-2)")
+    parser.add_argument("--allow-channel-2", action="store_true", help="allow experimental CH2 arbitrary-waveform operation")
     parser.add_argument("--dry-run", action="store_true", help="validate and encode without contacting the AWG")
     parser.add_argument("--enable-output", action=argparse.BooleanOptionalAction, default=defaults["enable_output"], help="leave selected channel enabled after import")
     parser.add_argument("--frequency", "--frequency-hz", dest="frequency_hz", type=float, default=defaults["frequency_hz"], help="override frequency in Hz")
@@ -417,9 +527,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def reject_channel_2(channel: int, allow_channel_2: bool) -> None:
+    if channel == 2 and not allow_channel_2:
+        raise ValueError(
+            "Channel 2 arbitrary-waveform operation is disabled by default; "
+            "use --allow-channel-2 to override"
+        )
+
+
 def main() -> int:
     args = parse_args()
     try:
+        reject_channel_2(args.channel, args.allow_channel_2)
         defaults = load_defaults(args.defaults_file)
         config = Config.from_defaults({**defaults, "timeout_ms": args.visa_timeout_ms})
         control_mode = args.list_resources or args.idn is not None or args.output is not None
@@ -436,7 +555,13 @@ def main() -> int:
         if args.output is not None:
             if not args.resource:
                 raise ValueError("--resource is required for --output")
-            set_output_state(args.resource, args.visa_timeout_ms, args.channel, args.output == "on")
+            set_output_state(
+                args.resource,
+                args.visa_timeout_ms,
+                args.channel,
+                args.output == "on",
+                debug=args.debug,
+            )
             print(f"Channel {args.channel} output: {args.output.upper()}")
             return 0
         if args.waveform_file is None:
@@ -447,6 +572,12 @@ def main() -> int:
             raise ValueError("--csv-column must be zero or greater")
         if args.user_slot is not None and not args.persist:
             raise ValueError("--user-slot requires --persist")
+        if args.waveform_name is not None and not args.persist:
+            raise ValueError("--name requires --persist")
+        if args.overwrite and not args.persist:
+            raise ValueError("--overwrite requires --persist")
+        if args.waveform_name is not None and args.user_slot is not None:
+            raise ValueError("--name and --user-slot cannot be used together")
         waveform = load_waveform(args.waveform_file, config, csv_delimiter=args.csv_delimiter, csv_value_column=args.csv_value_column)
         channel_specs = load_specs().channel(args.channel)
         if waveform.sample_count > channel_specs.arb_memory_depth_points:
@@ -470,6 +601,16 @@ def main() -> int:
             args.offset_voltage,
             args.frequency_hz,
             config,
+            persistent_name=(
+                args.waveform_name
+                if args.waveform_name is not None
+                else default_waveform_name(args.waveform_file)
+                if args.persist and args.user_slot is None
+                else None
+            ),
+            overwrite=args.overwrite,
+            debug=args.debug,
+            allow_channel_2=args.allow_channel_2,
         )
         print(result["identity"])
         print(
