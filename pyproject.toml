@@ -14,6 +14,9 @@ dependencies = ["PyVISA>=1.13", "PyVISA-py>=0.8"]
 [project.optional-dependencies]
 test = ["pytest>=8"]
 
+[project.entry-points."arbdraw.instrument_adapters"]
+rigol-dg1022 = "rigol_dg1022.bridge:send_waveform"
+
 [tool.setuptools]
 py-modules = ["awg_import", "data_catalog"]
 
