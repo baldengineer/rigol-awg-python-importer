@@ -15,7 +15,7 @@ dependencies = ["PyVISA>=1.13", "PyVISA-py>=0.8"]
 test = ["pytest>=8"]
 
 [tool.setuptools]
-py-modules = ["awg_import"]
+py-modules = ["awg_import", "data_catalog"]
 
 [tool.setuptools.packages.find]
 include = ["rigol_dg1022*"]

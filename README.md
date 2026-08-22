@@ -48,6 +48,17 @@ through `J`). The channel-specific `FREQ`, `VOLT`, `FUNC`, and `OUTP` command
 forms are used for CH1 and CH2 respectively. Keep `--enable-output` off while
 validating a first hardware upload.
 
+Query the names of user-defined waveforms in the DG1022's nonvolatile data
+memory with:
+
+```powershell
+python .\data_catalog.py --resource "USB0::0x1AB1::0x0588::...::INSTR"
+```
+
+Use `--all` to query the complete waveform catalog, including built-in patterns
+and `VOLATILE`. The user-memory query uses the programming-manual command
+`DATA:NVOLatile:CATalog?` (manual page 67, document page 2-55).
+
 ## ArbDraw bridge
 
 Install this adapter into the ArbDraw virtual environment in editable mode:
