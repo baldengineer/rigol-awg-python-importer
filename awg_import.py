@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from rigol_dg1022.visa import DEFAULT_TIMEOUT_MS, VisaConnection, idn, list_resources
+from rigol_dg1022.names import validate_waveform_name
 from rigol_dg1022.specs import load_specs
 
 
@@ -250,7 +251,7 @@ def _write_and_check(
 def _user_wave_name(user_slot: int) -> str:
     if not 0 <= user_slot <= 9:
         raise ValueError("--user-slot must be between 0 and 9 for the DG1000")
-    return chr(ord("A") + user_slot)
+    return validate_waveform_name(chr(ord("A") + user_slot), "persistent waveform name")
 
 
 def upload_waveform(

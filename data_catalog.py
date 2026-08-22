@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
+import time
 
 from rigol_dg1022.visa import DEFAULT_TIMEOUT_MS, VisaConnection, list_resources
+from rigol_dg1022.names import validate_waveform_name, validate_waveform_reference
 
 
 USER_CATALOG_QUERY = "DATA:NVOLatile:CATalog?"
 FREE_SLOTS_QUERY = "DATA:NVOL:FREE?"
 FULL_CATALOG_QUERY = "DATA:CATalog?"
+POINTS_QUERY = "DATA:ATTRibute:POINts?"
 BUILT_IN_NAMES = frozenset({"EXP_RISE", "EXP_FALL", "NEG_RAMP", "SINC", "CARDIAC"})
+SCPI_SETTLE_SECONDS = 2.0
+BYTES_PER_POINT = 2
 
 
 def parse_catalog_response(response: str) -> tuple[str, ...]:
@@ -36,6 +42,15 @@ def parse_catalog_response(response: str) -> tuple[str, ...]:
 
 def _query_catalog(connection: VisaConnection, command: str) -> tuple[str, ...]:
     return parse_catalog_response(connection.query(command))
+
+
+def _require_no_scpi_error(connection: VisaConnection, stage: str) -> None:
+    status = connection.query("SYST:ERR?")
+    match = re.match(r"^\s*([+-]?\d+)(?:\s*,|\s*$)", status)
+    if match is None:
+        raise RuntimeError(f"Unparseable SCPI error response after {stage}: {status}")
+    if int(match.group(1)) != 0:
+        raise RuntimeError(f"SCPI error after {stage}: {status}")
 
 
 def parse_free_slots_response(response: str) -> int:
@@ -76,6 +91,74 @@ def query_free_slots(resource: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> int
                 pass
 
 
+def query_waveform_byte_counts(
+    resource: str,
+    names: tuple[str, ...],
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, int | None]:
+    """Return stored byte counts, or None when the instrument cannot report one."""
+    counts: dict[str, int | None] = {}
+    with VisaConnection(resource, timeout_ms) as connection:
+        try:
+            for name in names:
+                if name.upper() in BUILT_IN_NAMES:
+                    counts[name] = None
+                    continue
+                response = connection.query(f"{POINTS_QUERY} {name}")
+                try:
+                    points = int(response.strip())
+                except (AttributeError, ValueError):
+                    # DG1022 firmware reports "Invalid Command" for built-in
+                    # waveform names. Clear that expected error before the
+                    # next query and leave their size unavailable.
+                    try:
+                        connection.query("SYST:ERR?")
+                    except RuntimeError:
+                        pass
+                    counts[name] = None
+                else:
+                    if points < 0:
+                        raise ValueError(f"negative point count for {name!r}: {response!r}")
+                    counts[name] = points * BYTES_PER_POINT
+            return counts
+        finally:
+            try:
+                connection.write("SYST:LOC")
+            except RuntimeError:
+                pass
+
+
+def rename_waveform(
+    resource: str,
+    old_name: str,
+    new_name: str,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> tuple[str, ...]:
+    """Rename a stored waveform and return the verified nonvolatile catalog."""
+    validate_waveform_reference(old_name, "old name")
+    validate_waveform_name(new_name, "new name")
+    if old_name == new_name:
+        raise ValueError("old and new names must be different")
+
+    with VisaConnection(resource, timeout_ms) as connection:
+        try:
+            connection.write(f"DATA:RENAME {old_name},{new_name}")
+            time.sleep(SCPI_SETTLE_SECONDS)
+            _require_no_scpi_error(connection, f"renaming {old_name} to {new_name}")
+            names = _query_catalog(connection, USER_CATALOG_QUERY)
+            normalized_names = {name.upper() for name in names}
+            if new_name.upper() not in normalized_names or old_name.upper() in normalized_names:
+                raise RuntimeError(
+                    f"rename verification failed; nonvolatile catalog is {names!r}"
+                )
+            return names
+        finally:
+            try:
+                connection.write("SYST:LOC")
+            except RuntimeError:
+                pass
+
+
 def query_all_waveform_names(resource: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> tuple[str, ...]:
     """Return built-in, volatile, and nonvolatile waveform names."""
     with VisaConnection(resource, timeout_ms) as connection:
@@ -88,8 +171,21 @@ def query_all_waveform_names(resource: str, timeout_ms: int = DEFAULT_TIMEOUT_MS
                 pass
 
 
-def print_full_catalog(names: tuple[str, ...], free_slots: int | None = None) -> None:
+def _format_waveform_name(name: str, byte_counts: dict[str, int | None]) -> str:
+    byte_count = byte_counts.get(name)
+    if byte_count is None:
+        return f"{name}: size unavailable"
+    points = byte_count // BYTES_PER_POINT
+    return f"{name}: {points:,} Points ({byte_count:,} bytes)"
+
+
+def print_full_catalog(
+    names: tuple[str, ...],
+    free_slots: int | None = None,
+    byte_counts: dict[str, int | None] | None = None,
+) -> None:
     """Print the full catalog grouped into built-in and remaining entries."""
+    byte_counts = byte_counts or {}
     built_in = tuple(name for name in names if name.upper() in BUILT_IN_NAMES)
     custom = tuple(name for name in names if name.upper() not in BUILT_IN_NAMES)
     if free_slots is not None and free_slots > 0:
@@ -99,7 +195,7 @@ def print_full_catalog(names: tuple[str, ...], free_slots: int | None = None) ->
     print(*built_in, sep="\n")
     print()
     print("Custom:")
-    print(*custom, sep="\n")
+    print(*(_format_waveform_name(name, byte_counts) for name in custom), sep="\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,6 +222,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="query the full catalog, including built-in and VOLATILE waveforms",
     )
+    parser.add_argument(
+        "--rename",
+        nargs=2,
+        metavar=("OLD", "NEW"),
+        help="rename a nonvolatile waveform, for example --rename 000 0_First",
+    )
     return parser.parse_args()
 
 
@@ -137,24 +239,57 @@ def main() -> int:
     if args.timeout_ms <= 0:
         print("--timeout-ms must be positive.", file=sys.stderr)
         return 2
+    if args.rename and not args.resource:
+        print("--rename requires --resource.", file=sys.stderr)
+        return 2
+    if args.rename and args.all:
+        print("--rename cannot be combined with --all.", file=sys.stderr)
+        return 2
 
     try:
         if args.list_resources:
             resources = list_resources()
             print(*resources, sep="\n")
         if args.resource:
+            if args.rename:
+                old_name, new_name = args.rename
+                names = rename_waveform(
+                    args.resource,
+                    old_name,
+                    new_name,
+                    args.timeout_ms,
+                )
+                byte_counts = query_waveform_byte_counts(
+                    args.resource,
+                    names,
+                    args.timeout_ms,
+                )
+                print(f"Renamed {old_name} to {new_name}.")
+                print("Nonvolatile waveforms:")
+                print(*(_format_waveform_name(name, byte_counts) for name in names), sep="\n")
+                return 0
             if args.all:
                 names = query_all_waveform_names(args.resource, args.timeout_ms)
                 free_slots = query_free_slots(args.resource, args.timeout_ms)
+                byte_counts = query_waveform_byte_counts(
+                    args.resource,
+                    names,
+                    args.timeout_ms,
+                )
             else:
                 names = query_user_memory_names(args.resource, args.timeout_ms)
                 free_slots = None
+                byte_counts = query_waveform_byte_counts(
+                    args.resource,
+                    names,
+                    args.timeout_ms,
+                ) if names else {}
             if args.all:
-                print_full_catalog(names, free_slots)
+                print_full_catalog(names, free_slots, byte_counts)
             elif not names:
                 print("No saved user waveforms found.")
             else:
-                print(*names, sep="\n")
+                print(*(_format_waveform_name(name, byte_counts) for name in names), sep="\n")
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Rigol communication failed: {exc}", file=sys.stderr)
         return 1
