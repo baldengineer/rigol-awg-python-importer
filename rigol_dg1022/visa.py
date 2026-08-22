@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 
@@ -77,10 +78,22 @@ class VisaConnection:
         return self._instrument
 
     def write(self, command: str) -> None:
-        self.instrument.write(command)
+        try:
+            self.instrument.write(command)
+        except Exception as exc:
+            raise RuntimeError(f"VISA write failed for {command!r}: {exc}") from exc
 
     def query(self, command: str) -> str:
-        response = self.instrument.query(command).strip()
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="read string doesn't end with termination characters",
+                    category=UserWarning,
+                )
+                response = self.instrument.query(command).strip()
+        except Exception as exc:
+            raise RuntimeError(f"VISA query failed for {command!r}: {exc}") from exc
         if not response:
             raise RuntimeError(f"Instrument returned an empty response to {command!r}")
         return response

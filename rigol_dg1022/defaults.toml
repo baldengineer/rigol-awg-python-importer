@@ -1,7 +1,7 @@
 usb_resource = ""
 timeout_ms = 60000
 expected_identity_prefix = "RIGOL TECHNOLOGIES,DG1022"
-max_point_count = 16384
+max_point_count = 524288
 max_dac_code = 16383
 frequency_hz = 1000.0
 voltage_vpp = 1.0

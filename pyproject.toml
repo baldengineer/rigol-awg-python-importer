@@ -21,4 +21,4 @@ py-modules = []
 include = ["rigol_dg1022*"]
 
 [tool.setuptools.package-data]
-rigol_dg1022 = ["defaults.toml"]
+rigol_dg1022 = ["defaults.toml", "specs.toml"]

@@ -1,0 +1,28 @@
+manufacturer = "RIGOL"
+series = "DG1000"
+model = "DG1022"
+protocol_max_waveform_points = 524288
+nonvolatile_waveform_count = 10
+nonvolatile_storage_scope = "shared"
+
+[[channels]]
+number = 1
+arb_memory_depth_points = 4096
+vertical_resolution_bits = 14
+vertical_resolution_includes_sign = true
+sampling_rate_msps = 100.0
+minimum_rise_fall_time_ns = 35.0
+rise_fall_time_typical = true
+jitter_rms_ns = 6.0
+jitter_rms_period_ppm = 30.0
+
+[[channels]]
+number = 2
+arb_memory_depth_points = 1024
+vertical_resolution_bits = 14
+vertical_resolution_includes_sign = true
+sampling_rate_msps = 100.0
+minimum_rise_fall_time_ns = 35.0
+rise_fall_time_typical = true
+jitter_rms_ns = 6.0
+jitter_rms_period_ppm = 30.0

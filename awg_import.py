@@ -12,8 +12,10 @@ import argparse
 import csv
 import json
 import math
+import re
 import struct
 import sys
+import time
 import tomllib
 from dataclasses import dataclass
 from importlib.resources import files
@@ -21,9 +23,12 @@ from pathlib import Path
 from typing import Any
 
 from rigol_dg1022.visa import DEFAULT_TIMEOUT_MS, VisaConnection, idn, list_resources
+from rigol_dg1022.specs import load_specs
 
 
 DEFAULTS_FILE = "defaults.toml"
+SCPI_SETTLE_SECONDS = 2.0
+DATA_DAC_SETTLE_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -190,14 +195,176 @@ def encode_dab(waveform: Waveform, config: Config) -> bytes:
     ])
 
 
+def encode_dac_values(waveform: Waveform, config: Config) -> tuple[int, ...]:
+    """Map waveform voltages to the DG1000's 14-bit DAC values."""
+    span = waveform.amplitude_vpp
+    return tuple(
+        int(
+            max(0.0, min(1.0, (value - waveform.low_voltage) / span))
+            * config.max_dac_code
+            + 0.5
+        )
+        for value in waveform.values
+    )
+
+
+def make_dac_command(waveform: Waveform, config: Config) -> str:
+    """Build the ASCII DATA:DAC command specified by the DG1000 manual."""
+    values = ",".join(str(value) for value in encode_dac_values(waveform, config))
+    return f"DATA:DAC VOLATILE,{values}"
+
+
 def make_ieee_block(payload: bytes) -> bytes:
     length = str(len(payload)).encode("ascii")
     return b"#" + str(len(length)).encode("ascii") + length + payload
 
 
 def set_output_state(resource: str, timeout_ms: int, channel: int, enabled: bool) -> None:
+    output_command = "OUTP" if channel == 1 else "OUTP:CH2"
     with VisaConnection(resource, timeout_ms) as connection:
-        connection.write(f"OUTP{channel} {'ON' if enabled else 'OFF'}")
+        connection.write(f"{output_command} {'ON' if enabled else 'OFF'}")
+
+
+def _require_no_scpi_error(connection: VisaConnection, stage: str) -> str:
+    status = connection.query("SYST:ERR?")
+    match = re.match(r"^\s*([+-]?\d+)(?:\s*,|\s*$)", status)
+    if match is None:
+        raise RuntimeError(f"Unparseable SCPI error response after {stage}: {status}")
+    if int(match.group(1)) != 0:
+        raise RuntimeError(f"SCPI error after {stage}: {status}")
+    return status
+
+
+def _write_and_check(
+    connection: VisaConnection,
+    command: str,
+    stage: str,
+    *,
+    settle_seconds: float = SCPI_SETTLE_SECONDS,
+) -> str:
+    connection.write(command)
+    time.sleep(settle_seconds)
+    return _require_no_scpi_error(connection, stage)
+
+
+def _user_wave_name(user_slot: int) -> str:
+    if not 0 <= user_slot <= 9:
+        raise ValueError("--user-slot must be between 0 and 9 for the DG1000")
+    return chr(ord("A") + user_slot)
+
+
+def upload_waveform(
+    resource: str,
+    timeout_ms: int,
+    waveform: Waveform,
+    user_slot: int | None,
+    channel: int,
+    enable_output: bool,
+    amplitude_vpp: float,
+    offset_voltage: float,
+    frequency_hz: float,
+    config: Config,
+) -> dict[str, str]:
+    """Upload one ASCII DAC waveform and configure either DG1000 channel."""
+    specs = load_specs()
+    channel_specs = specs.channel(channel)
+    if waveform.sample_count > channel_specs.arb_memory_depth_points:
+        raise ValueError(
+            f"waveform has {waveform.sample_count} points, but CH{channel} supports "
+            f"{channel_specs.arb_memory_depth_points} arbitrary points"
+        )
+    output = "OUTP" if channel == 1 else "OUTP:CH2"
+    frequency = "FREQ" if channel == 1 else "FREQ:CH2"
+    unit = "VOLT:UNIT" if channel == 1 else "VOLT:UNIT:CH2"
+    high = "VOLT:HIGH" if channel == 1 else "VOLT:HIGH:CH2"
+    low = "VOLT:LOW" if channel == 1 else "VOLT:LOW:CH2"
+    select = "FUNC:USER" if channel == 1 else "FUNC:USER:CH2"
+    function_query = "FUNC?" if channel == 1 else "FUNC:CH2?"
+    function = "FUNC" if channel == 1 else "FUNC:CH2"
+    user_name = None if user_slot is None else _user_wave_name(user_slot)
+    low_voltage = offset_voltage - amplitude_vpp / 2.0
+    high_voltage = offset_voltage + amplitude_vpp / 2.0
+    completed = False
+
+    with VisaConnection(resource, timeout_ms) as connection:
+        identity = connection.query("*IDN?")
+        if config.expected_identity_prefix and not identity.startswith(config.expected_identity_prefix):
+            raise RuntimeError(f"Unexpected instrument identity: {identity}")
+        try:
+            _write_and_check(connection, f"{output} OFF", f"disabling channel {channel}")
+            _write_and_check(
+                connection,
+                f"{function} USER",
+                f"selecting arbitrary mode on channel {channel}",
+            )
+            _write_and_check(
+                connection,
+                f"{frequency} {frequency_hz:.12g}",
+                f"setting channel {channel} frequency",
+            )
+            _write_and_check(
+                connection,
+                f"{unit} VPP",
+                f"setting channel {channel} voltage unit",
+            )
+            _write_and_check(
+                connection,
+                f"{high} {high_voltage:.12g}",
+                f"setting channel {channel} high level",
+            )
+            _write_and_check(
+                connection,
+                f"{low} {low_voltage:.12g}",
+                f"setting channel {channel} low level",
+            )
+            status = _write_and_check(
+                connection,
+                make_dac_command(waveform, config),
+                "loading DATA:DAC volatile memory",
+                settle_seconds=DATA_DAC_SETTLE_SECONDS,
+            )
+            if user_name is not None:
+                _write_and_check(
+                connection,
+                f"DATA:COPY {user_name},VOLATILE",
+                f"storing waveform as {user_name}",
+                    settle_seconds=2.0,
+                )
+                selected_name = user_name
+            else:
+                selected_name = "VOLATILE"
+            _write_and_check(
+                connection,
+                f"{select} {selected_name}",
+                f"selecting {selected_name} on channel {channel}",
+            )
+            selected_function = connection.query(function_query)
+            _write_and_check(
+                connection,
+                f"{output} {'ON' if enable_output else 'OFF'}",
+                f"setting final channel {channel} output",
+            )
+            output_state = connection.query(f"{output}?").strip().upper()
+            expected_output = "ON" if enable_output else "OFF"
+            if output_state not in {expected_output, "1" if enable_output else "0"}:
+                raise RuntimeError(
+                    f"Channel {channel} output state is {output_state}; expected {expected_output}"
+                )
+            reported_points = connection.query(f"DATA:ATTR:POINTS? {selected_name}")
+            completed = True
+            return {
+                "identity": identity,
+                "points": str(waveform.sample_count),
+                "reported_points": reported_points,
+                "user_memory": user_name or "",
+                "channel": str(channel),
+                "function": selected_function,
+                "output": output_state,
+                "error": status,
+            }
+        finally:
+            if not completed or not enable_output:
+                connection.write(f"{output} OFF")
 
 
 def parse_args() -> argparse.Namespace:
@@ -219,7 +386,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resource", default=defaults["usb_resource"], help="VISA resource")
     parser.add_argument("--visa-timeout-ms", type=int, default=defaults["timeout_ms"], help="VISA timeout in milliseconds")
     parser.add_argument("--persist", action=argparse.BooleanOptionalAction, default=defaults["persist"], help="copy waveform into persistent memory")
-    parser.add_argument("--user-slot", type=int, choices=range(32), metavar="0..31", help="persistent memory slot")
+    parser.add_argument("--user-slot", type=int, choices=range(10), metavar="0..9", help="persistent DG1000 memory slot (0=A through 9=J)")
     parser.add_argument("--channel", type=int, choices=(1, 2), default=defaults["channel"], help="AWG output channel")
     parser.add_argument("--dry-run", action="store_true", help="validate and encode without contacting the AWG")
     parser.add_argument("--enable-output", action=argparse.BooleanOptionalAction, default=defaults["enable_output"], help="leave selected channel enabled after import")
@@ -260,12 +427,39 @@ def main() -> int:
         if args.user_slot is not None and not args.persist:
             raise ValueError("--user-slot requires --persist")
         waveform = load_waveform(args.waveform_file, config, csv_delimiter=args.csv_delimiter, csv_value_column=args.csv_value_column)
-        payload = encode_dab(waveform, config)
-        print(f"Name: {waveform.name}\nType: {waveform.waveform_type}\nPoints: {waveform.sample_count}\nPayload: {len(payload)} bytes\nIEEE header: {make_ieee_block(payload)[:6].decode('ascii')}\nChannel: {args.channel}\nAmplitude: {args.amplitude_vpp:g} Vpp\nOffset: {args.offset_voltage:g} V\nFrequency: {args.frequency_hz:g} Hz")
+        channel_specs = load_specs().channel(args.channel)
+        if waveform.sample_count > channel_specs.arb_memory_depth_points:
+            raise ValueError(
+                f"waveform has {waveform.sample_count} points, but CH{args.channel} "
+                f"supports {channel_specs.arb_memory_depth_points} arbitrary points"
+            )
+        dac_command = make_dac_command(waveform, config)
+        print(f"Name: {waveform.name}\nType: {waveform.waveform_type}\nPoints: {waveform.sample_count}\nChannel memory: {channel_specs.arb_memory_depth_points} points\nDATA:DAC payload: {len(dac_command.encode('ascii'))} ASCII bytes\nChannel: {args.channel}\nAmplitude: {args.amplitude_vpp:g} Vpp\nOffset: {args.offset_voltage:g} V\nFrequency: {args.frequency_hz:g} Hz")
         if args.dry_run:
             print("Dry run complete; the instrument was not contacted")
             return 0
-        raise RuntimeError("DG1022 waveform upload is not implemented yet; use --dry-run while SCPI upload commands are being validated")
+        result = upload_waveform(
+            args.resource,
+            args.visa_timeout_ms,
+            waveform,
+            args.user_slot if args.persist else None,
+            args.channel,
+            args.enable_output,
+            args.amplitude_vpp,
+            args.offset_voltage,
+            args.frequency_hz,
+            config,
+        )
+        print(result["identity"])
+        print(
+            f"Loaded {result['points']} requested points into {result['function']} "
+            f"on CH{result['channel']}"
+        )
+        if result["reported_points"] != result["points"]:
+            print(f"Instrument-reported volatile memory: {result['reported_points']} points")
+        if result["user_memory"]:
+            print(f"Persistent memory: {result['user_memory']}")
+        print(f"Channel {result['channel']} output: {result['output']}")
     except (ValueError, RuntimeError, OSError) as exc:
         print(f"Import failed: {exc}", file=sys.stderr)
         return 1
