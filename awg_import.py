@@ -30,6 +30,7 @@ from rigol_dg1022.specs import load_specs
 DEFAULTS_FILE = "defaults.toml"
 SCPI_SETTLE_SECONDS = 2.0
 DATA_DAC_SETTLE_SECONDS = 2.0
+_ARBDRAW_WAVEFORM_TYPES = {"custom", "sine", "square", "triangle", "ramp", "pulse", "dc", "noise"}
 
 
 class _DebugConnection:
@@ -147,16 +148,38 @@ def waveform_from_document(document: dict[str, Any], config: Config) -> Waveform
     values = waveform.get("values")
     if not isinstance(values, list) or len(values) != count:
         raise ValueError("waveform.values length must equal waveform.sampleCount")
-    samples = tuple(_number(value, f"waveform.values[{index}]") for index, value in enumerate(values))
+    # ArbDraw accepts numeric strings for metadata, but sample values must be
+    # actual finite JSON numbers.  Keep this distinction so malformed sample
+    # arrays are rejected instead of being silently coerced.
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+        raise ValueError("waveform.values must contain finite JSON numbers")
+    samples = tuple(float(value) for value in values)
     low = _number(waveform.get("lowVoltage"), "waveform.lowVoltage")
     high = _number(waveform.get("highVoltage"), "waveform.highVoltage")
     if high <= low or any(value < low or value > high for value in samples):
         raise ValueError("waveform values must lie within a non-zero lowVoltage/highVoltage range")
     sample_rate = _number(waveform.get("sampleRateMSa"), "waveform.sampleRateMSa")
     frequency = _number(waveform.get("frequencyHz"), "waveform.frequencyHz")
-    if sample_rate <= 0 or frequency <= 0:
-        raise ValueError("sampleRateMSa and frequencyHz must be greater than zero")
-    return Waveform(str(document.get("name", "Imported waveform")), str(waveform.get("type", "custom")), samples, low, high, sample_rate * 1e6, frequency)
+    if sample_rate < 0.000001 or frequency < 0.000001:
+        raise ValueError("sampleRateMSa and frequencyHz must be at least 0.000001")
+
+    # AWG playback frequency is authoritative when supplied.  Older project
+    # files omit AWG, so retain the waveform frequency fallback.
+    awg = document.get("AWG")
+    if isinstance(awg, dict):
+        if "frequencyHz" in awg:
+            frequency = _number(awg["frequencyHz"], "AWG.frequencyHz")
+        elif "periodSeconds" in awg:
+            period = _number(awg["periodSeconds"], "AWG.periodSeconds")
+            if period <= 0:
+                raise ValueError("AWG.periodSeconds must be greater than zero")
+            frequency = 1 / period
+        if frequency < 0.000001:
+            raise ValueError("AWG frequency must be at least 0.000001 Hz")
+
+    waveform_type = waveform.get("type", "custom")
+    waveform_type = waveform_type if isinstance(waveform_type, str) and waveform_type in _ARBDRAW_WAVEFORM_TYPES else "custom"
+    return Waveform(str(document.get("name", "Imported waveform")), waveform_type, samples, low, high, sample_rate * 1e6, frequency)
 
 
 def load_arbdraw_json(path: str | Path, config: Config) -> Waveform:
@@ -521,7 +544,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-channel-2", action="store_true", help="allow experimental CH2 arbitrary-waveform operation")
     parser.add_argument("--dry-run", action="store_true", help="validate and encode without contacting the AWG")
     parser.add_argument("--enable-output", action=argparse.BooleanOptionalAction, default=defaults["enable_output"], help="leave selected channel enabled after import")
-    parser.add_argument("--frequency", "--frequency-hz", dest="frequency_hz", type=float, default=defaults["frequency_hz"], help="override frequency in Hz")
+    parser.add_argument("--frequency", "--frequency-hz", dest="frequency_hz", type=float, default=None, help="override the waveform/AWG frequency in Hz")
     parser.add_argument("--amplitude", "--amplitude-vpp", dest="amplitude_vpp", type=float, default=defaults["voltage_vpp"], help="override amplitude in Vpp")
     parser.add_argument("--offset", "--offset-v", dest="offset_voltage", type=float, default=defaults["offset_voltage"], help="override offset in volts")
     return parser.parse_args()
@@ -566,8 +589,8 @@ def main() -> int:
             return 0
         if args.waveform_file is None:
             raise ValueError("A waveform file is required")
-        if args.visa_timeout_ms <= 0 or args.frequency_hz <= 0 or args.amplitude_vpp <= 0 or not math.isfinite(args.offset_voltage):
-            raise ValueError("timeout, frequency, and amplitude must be positive; offset must be finite")
+        if args.visa_timeout_ms <= 0 or args.amplitude_vpp <= 0 or not math.isfinite(args.offset_voltage):
+            raise ValueError("timeout and amplitude must be positive; offset must be finite")
         if args.csv_value_column is not None and args.csv_value_column < 0:
             raise ValueError("--csv-column must be zero or greater")
         if args.user_slot is not None and not args.persist:
@@ -579,6 +602,9 @@ def main() -> int:
         if args.waveform_name is not None and args.user_slot is not None:
             raise ValueError("--name and --user-slot cannot be used together")
         waveform = load_waveform(args.waveform_file, config, csv_delimiter=args.csv_delimiter, csv_value_column=args.csv_value_column)
+        frequency_hz = waveform.frequency_hz if args.frequency_hz is None else args.frequency_hz
+        if frequency_hz <= 0 or not math.isfinite(frequency_hz):
+            raise ValueError("frequency must be a positive finite number")
         channel_specs = load_specs().channel(args.channel)
         if waveform.sample_count > channel_specs.arb_memory_depth_points:
             raise ValueError(
@@ -586,7 +612,7 @@ def main() -> int:
                 f"supports {channel_specs.arb_memory_depth_points} arbitrary points"
             )
         dac_command = make_dac_command(waveform, config)
-        print(f"Name: {waveform.name}\nType: {waveform.waveform_type}\nPoints: {waveform.sample_count}\nChannel memory: {channel_specs.arb_memory_depth_points} points\nDATA:DAC payload: {len(dac_command.encode('ascii'))} ASCII bytes\nChannel: {args.channel}\nAmplitude: {args.amplitude_vpp:g} Vpp\nOffset: {args.offset_voltage:g} V\nFrequency: {args.frequency_hz:g} Hz")
+        print(f"Name: {waveform.name}\nType: {waveform.waveform_type}\nPoints: {waveform.sample_count}\nChannel memory: {channel_specs.arb_memory_depth_points} points\nDATA:DAC payload: {len(dac_command.encode('ascii'))} ASCII bytes\nChannel: {args.channel}\nAmplitude: {args.amplitude_vpp:g} Vpp\nOffset: {args.offset_voltage:g} V\nFrequency: {frequency_hz:g} Hz")
         if args.dry_run:
             print("Dry run complete; the instrument was not contacted")
             return 0
@@ -599,7 +625,7 @@ def main() -> int:
             args.enable_output,
             args.amplitude_vpp,
             args.offset_voltage,
-            args.frequency_hz,
+            frequency_hz,
             config,
             persistent_name=(
                 args.waveform_name

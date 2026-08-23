@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import awg_import
 import pytest
 
@@ -142,6 +144,38 @@ def test_channel_two_can_be_explicitly_allowed() -> None:
 
 def test_channel_one_is_allowed() -> None:
     awg_import.reject_channel_2(1, False)
+
+
+def test_loads_current_arbdraw_example_and_uses_awg_playback_frequency() -> None:
+    config = awg_import.Config(max_point_count=524_288)
+    waveform = awg_import.load_arbdraw_json(
+        Path(__file__).parents[1] / "examples" / "3_sine_2Mhz_run_at_6MHz.arbdraw.json",
+        config,
+    )
+
+    assert waveform.name == "3_sine_2Mhz_run_at_6MHz"
+    assert waveform.waveform_type == "sine"
+    assert waveform.sample_count == 10_001
+    assert waveform.sample_rate_sa == 1_250_000_000
+    assert waveform.frequency_hz == pytest.approx(666_666.6666666666)
+
+
+def test_arbdraw_sample_values_do_not_accept_numeric_strings() -> None:
+    document = {
+        "schema": "arbdraw.waveform",
+        "version": 1,
+        "waveform": {
+            "sampleCount": "2",
+            "sampleRateMSa": "1",
+            "frequencyHz": "1",
+            "lowVoltage": "-1",
+            "highVoltage": "1",
+            "values": ["-1", 1],
+        },
+    }
+
+    with pytest.raises(ValueError, match="finite JSON numbers"):
+        awg_import.waveform_from_document(document, awg_import.Config())
 
 
 def test_upload_rejects_duplicate_before_data_transfer(monkeypatch) -> None:
