@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import awg_import
@@ -155,7 +156,7 @@ def test_loads_current_arbdraw_example_and_uses_awg_playback_frequency() -> None
 
     assert waveform.name == "3_sine_2Mhz_run_at_6MHz"
     assert waveform.waveform_type == "sine"
-    assert waveform.sample_count == 10_001
+    assert waveform.sample_count == 4_096
     assert waveform.sample_rate_sa == 1_250_000_000
     assert waveform.frequency_hz == pytest.approx(666_666.6666666666)
 
@@ -176,6 +177,14 @@ def test_arbdraw_sample_values_do_not_accept_numeric_strings() -> None:
 
     with pytest.raises(ValueError, match="finite JSON numbers"):
         awg_import.waveform_from_document(document, awg_import.Config())
+
+
+def test_all_json_examples_fit_dg1022_channel_one_memory() -> None:
+    examples = Path(__file__).parents[1] / "examples"
+    for path in examples.glob("*.json"):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["waveform"]["sampleCount"] <= 4_096
+        assert len(document["waveform"]["values"]) == document["waveform"]["sampleCount"]
 
 
 def test_upload_rejects_duplicate_before_data_transfer(monkeypatch) -> None:

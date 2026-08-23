@@ -10,10 +10,10 @@ voltage samples only. Use `--csv-column` for a selected voltage column and
 | File | Shape | Points | Sample rate | Waveform frequency | Voltage range |
 | --- | --- | ---: | ---: | ---: | ---: |
 | `sample_waveform_01_funky_sine.json` | Custom/funky sine | 1,000 | 1,250 MSa/s | 2.5 MHz | -5 V to 5 V |
-| `sample_waveform_100k_sine.arbdraw.json` | Sine | 100,000 | 1,250 MSa/s | 1.25 GHz | -0.5 V to 0.5 V |
+| `sample_waveform_100k_sine.arbdraw.json` | Sine (resampled) | 4,096 | 1,250 MSa/s | 1.25 GHz | -0.5 V to 0.5 V |
 | `sample_waveform_17p-pulse.arbdraw.json` | Square/pulse | 1,000 | 1,250 MSa/s | 2.5 MHz | -0.5 V to 0.5 V |
 | `uart_hello_115200.arbdraw.json` | Serial/UART pattern | 1,000 | 1,250 MSa/s | 2 kHz | -0.5 V to 0.5 V |
-| `3_sine_2Mhz_run_at_6MHz.arbdraw.json` | Sine, 3 cycles | 10,001 | 1,250 MSa/s | 2 MHz waveform / 666.667 kHz AWG | -0.5 V to 0.5 V |
+| `3_sine_2Mhz_run_at_6MHz.arbdraw.json` | Sine (resampled) | 4,096 | 1,250 MSa/s | 2 MHz waveform / 666.667 kHz AWG | -0.5 V to 0.5 V |
 | `hello_world_56700.csv` | Headerless `x,y` CSV sine | 1,000 | 1,248.75 MSa/s | 1.24875 MHz | -0.5 V to 0.5 V |
 
 The UART example contains a repeating waveform pattern intended to represent a
@@ -32,6 +32,5 @@ The importer reports the JSON sample rate separately and configures frequency fr
 `frequencyHz`, unless a value in `defaults.toml` or a command-line override takes
 precedence.
 
-The 100,000-point sine file exercises the confirmed edit-memory limit of the tested
-MP750290/OWON XDG3000-family firmware and may take longer to upload than the smaller
-examples.
+All examples contain no more than 4,096 points, matching the DG1022 CH1 arbitrary
+waveform memory limit. The two larger source waveforms have been resampled to fit.
