@@ -13,7 +13,7 @@ voltage samples only. Use `--csv-column` for a selected voltage column and
 | `sample_waveform_100k_sine.arbdraw.json` | Sine (resampled) | 4,096 | 1,250 MSa/s | 1.25 GHz | -0.5 V to 0.5 V |
 | `sample_waveform_17p-pulse.arbdraw.json` | Square/pulse | 1,000 | 1,250 MSa/s | 2.5 MHz | -0.5 V to 0.5 V |
 | `uart_hello_115200.arbdraw.json` | Serial/UART pattern | 1,000 | 1,250 MSa/s | 2 kHz | -0.5 V to 0.5 V |
-| `3_sine_2Mhz_run_at_6MHz.arbdraw.json` | Sine (resampled) | 4,096 | 1,250 MSa/s | 2 MHz waveform / 666.667 kHz AWG | -0.5 V to 0.5 V |
+| `513pt-sine-wave.arbdraw.json` | Sine | 513 | 100 MSa/s | 2.345 MHz waveform / 1.1725 MHz AWG | -0.5 V to 0.5 V |
 | `hello_world_56700.csv` | Headerless `x,y` CSV sine | 1,000 | 1,248.75 MSa/s | 1.24875 MHz | -0.5 V to 0.5 V |
 
 The UART example contains a repeating waveform pattern intended to represent a

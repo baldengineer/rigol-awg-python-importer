@@ -150,15 +150,15 @@ def test_channel_one_is_allowed() -> None:
 def test_loads_current_arbdraw_example_and_uses_awg_playback_frequency() -> None:
     config = awg_import.Config(max_point_count=524_288)
     waveform = awg_import.load_arbdraw_json(
-        Path(__file__).parents[1] / "examples" / "3_sine_2Mhz_run_at_6MHz.arbdraw.json",
+        Path(__file__).parents[1] / "examples" / "513pt-sine-wave.arbdraw.json",
         config,
     )
 
-    assert waveform.name == "3_sine_2Mhz_run_at_6MHz"
+    assert waveform.name == "513pt-sine-wave"
     assert waveform.waveform_type == "sine"
-    assert waveform.sample_count == 4_096
-    assert waveform.sample_rate_sa == 1_250_000_000
-    assert waveform.frequency_hz == pytest.approx(666_666.6666666666)
+    assert waveform.sample_count == 513
+    assert waveform.sample_rate_sa == 100_000_000
+    assert waveform.frequency_hz == pytest.approx(1_172_500)
 
 
 def test_arbdraw_sample_values_do_not_accept_numeric_strings() -> None:
